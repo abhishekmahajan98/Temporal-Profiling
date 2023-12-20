@@ -125,6 +125,59 @@ def regular_exp_count(array):
 
     return re_count
 
+#Method that extracts month from a year month column of the format - "YYYY-MM" or "YYYYMM"
+def extract_month(string):
+    match = re.search(r'\d{4}[-]?(0[1-9]|1[0-2])', string)
+    if match:
+        return match.group()
+    else:
+        return None
+
+#Method that extracts month from a year month column of the format - "YYYY-MM" or "YYYYMM"
+def extract_year(string):
+    match = re.search(r'\b\d{4}\b', string)
+    if match:
+        return match.group()
+    else:
+        return None
+
+#Method to create a new date with month passed, or update an existing date's month
+def replace_month(original_datetime, new_month):
+    month_dict = {
+        'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April',
+        'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August',
+        'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December',
+        'January': 'January', 'February': 'February', 'March': 'March', 'April': 'April',
+        'June': 'June', 'July': 'July', 'August': 'August',
+        'September': 'September', 'October': 'October', 'November': 'November', 'December': 'December'
+    }
+
+    # Check if original_datetime is empty, create a new datetime object
+    if original_datetime is None:
+        original_datetime = datetime(day=1, month=1, year=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # Check if the new_month is a number (string representation)
+    if new_month.isdigit():
+        new_month = int(new_month)
+        if 1 <= new_month <= 12:
+            # Use the number as an index to get the corresponding month name
+            new_month = list(month_dict.values())[new_month - 1]
+        else:
+            return None  # Return None for an invalid month number
+
+    # Parse the existing datetime's month to get the year and day
+    new_datetime = original_datetime.replace(month=1)  # Set it to January temporarily
+    try:
+        # Parse the new month string using strptime
+        new_datetime = new_datetime.replace(month=datetime.strptime(new_month, '%B').month)
+    except ValueError:
+        try:
+            new_datetime = new_datetime.replace(month=datetime.strptime(new_month, '%b').month)
+        except ValueError:
+            return None  # Return None for an invalid month string
+
+    return new_datetime.replace(day=original_datetime.day, year=original_datetime.year)
+
 
 def unclean_values_ratio(c_type, re_count, num_total):
     """Count how many values don't match a given type.
@@ -307,21 +360,120 @@ def identify_types(array, name, geo_data, manual=None):
             # Count distinct values
             column_meta['num_distinct_values'] = len(distinct_values)
 
+        #identify dates/ time
+        dates = []
+        if structural_type == types.INTEGER or structural_type == types.TEXT:
             # Identify years
-            if name.strip().lower() == 'year':
-                with tracer.start_as_current_span('profile/parse_years'):
-                    dates = []
-                    for year in array:
+            if 'year' in name.strip().lower():
+                for year in array:
+                    try:
+                        # Handle a column that contains both year and month in the form -  "YYYY-MM" or "YYYYMM"
+                        if (structural_type == types.INTEGER):
+                            if int(year) > 9999:
+                                year = extract_year(str(year))
+                        elif structural_type == types.TEXT:
+                            if len(year) > 4:
+                                year = extract_year(str(year))
+                        dates.append(datetime(
+                            int(year), 1, 1,
+                            tzinfo=dateutil.tz.UTC,
+                        ))
+                    except ValueError:
+                        print("Error parsing dates for column ", name, " due to value error in year parsing" )
+                        pass
+                if len(dates) >= threshold:
+                    structural_type = types.TEXT
+                    semantic_types_dict[types.DATE] = 'Year'
+                    semantic_types_dict['Data'] = dates
+
+            # Adding similar checks for month, day, hour, min, sec based on column name (will be verified later as well)
+            #Identify months
+            if 'month' in name.strip().lower():
+                #If the column has both year and month, dates must have been already declared
+                if len(dates) != 0:
+                    for index, date in enumerate(dates):
                         try:
-                            dates.append(datetime(
-                                int(year), 1, 1,
-                                tzinfo=dateutil.tz.UTC,
-                            ))
+                            dates[index] = replace_month(extract_month(date), array[index])
                         except ValueError:
+                            print("Error parsing dates for column ", name, " due to value error in month parsing" )
+                            pass
+                        if len(dates) >= threshold:
+                            structural_type = types.TEXT
+                            semantic_types_dict[types.DATE] = 'Year_Month'
+                            semantic_types_dict['Data'] = dates
+                else:
+                    for month in array:
+                        try:
+                            dates.append(replace_month(None, month))
+                        except ValueError:
+                            print("Error parsing dates for column ", name, " due to value error in month parsing" )
                             pass
                     if len(dates) >= threshold:
                         structural_type = types.TEXT
-                        semantic_types_dict[types.DATE_TIME] = dates
+                        semantic_types_dict[types.DATE] = 'Month'
+                        semantic_types_dict['Data'] = dates
+
+            #Identify day
+            if 'day' in name.strip().lower():
+                for day in array:
+                    try:
+                        dates.append(datetime(
+                                1, 1, int(day),
+                                tzinfo=dateutil.tz.UTC))
+                    except ValueError:
+                        print("Error parsing dates for column ", name, " due to value error in day parsing" )
+                        pass
+                    if len(dates) >= threshold:
+                        structural_type = types.TEXT
+                        semantic_types_dict[types.DATE] = 'Day'
+                        semantic_types_dict['Data'] = dates
+
+            times = []
+            #Identify hour
+            if 'hour' in name.strip().lower():
+                for hour in array:
+                    try:
+                        times.append(datetime(
+                                1, 1, 1, int(hour), 0, 0,
+                                tzinfo=dateutil.tz.UTC))
+                    except ValueError:
+                        print("Error parsing dates for column ", name, " due to value error in hour parsing" )
+                        pass
+                    if len(dates) >= threshold:
+                        structural_type = types.TEXT
+                        semantic_types_dict[types.TIME] = 'Hour'
+                        semantic_types_dict['Data'] = times
+
+            #Identify minutes
+            if 'minute' in name.strip().lower():
+                for minute in array:
+                    try:
+                        times.append(datetime(
+                                1, 1, 1, 0, int(minute), 0,
+                                tzinfo=dateutil.tz.UTC))
+                    except ValueError:
+                        print("Error parsing dates for column ", name, " due to value error in minute parsing" )
+                        pass
+                    if len(dates) >= threshold:
+                        structural_type = types.TEXT
+                        semantic_types_dict[types.TIME] = 'Minute'
+                        semantic_types_dict['Data'] = times
+
+            #Identify seconds
+            if 'second' in name.strip().lower():
+                for second in array:
+                    try:
+                        times.append(datetime(
+                                1, 1, 1, 0, 0, int(second),
+                                tzinfo=dateutil.tz.UTC))
+                    except ValueError:
+                        print("Error parsing dates for column ", name, " due to value error in second parsing" )
+                        pass
+                    if len(dates) >= threshold:
+                        structural_type = types.TEXT
+                        semantic_types_dict[types.TIME] = 'Second'
+                        semantic_types_dict['Data'] = times
+                
 
         # Identify lat/long
         if structural_type == types.FLOAT:
@@ -343,12 +495,14 @@ def identify_types(array, name, geo_data, manual=None):
                 if num_long >= threshold and any(n in name.lower() for n in LONGITUDE):
                     semantic_types_dict[types.LONGITUDE] = None
 
+        #TODO AA: Detection of more columns as DATE AND TIMES!
         # Identify dates
         with tracer.start_as_current_span('profile/parse_dates'):
             parsed_dates = parse_dates(array)
 
         if len(parsed_dates) >= threshold:
-            semantic_types_dict[types.DATE_TIME] = parsed_dates
+            semantic_types_dict[types.DATE_TIME] = 'DateTime'
+            semantic_types_dict['Data'] = parsed_dates
             if structural_type == types.INTEGER:
                 # 'YYYYMMDD' format means values can be parsed as integers, but
                 # that's not what they are

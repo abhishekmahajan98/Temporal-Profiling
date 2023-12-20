@@ -18,11 +18,11 @@ import random
 import re
 import warnings
 
-from .numerical import mean_stddev, get_numerical_ranges
+from .numerical import mean_stddev, get_numerical_ranges, get_numerical_ranges_new
 from .profile_types import identify_types, determine_dataset_type
 from .spatial import LatLongColumn, Geohasher, nominatim_resolve_all, \
     pair_latlong_columns, get_spatial_ranges, parse_wkt_column
-from .temporal import get_temporal_resolution
+from .temporal import get_temporal_resolution, getQuarterData, getWeekData, getTimeOfDayData, checkAndCombineTemporalColumns
 from . import types
 
 
@@ -309,7 +309,7 @@ def process_column(
     # Add semantic types to the ones already present
     sem_types = column_meta.setdefault('semantic_types', [])
     for sem_type in semantic_types_dict:
-        if sem_type not in sem_types:
+        if sem_type not in sem_types  and sem_type != 'Data':
             sem_types.append(sem_type)
     # Insert additional metadata
     column_meta.update(additional_meta)
@@ -367,7 +367,7 @@ def process_column(
                 }
 
     if types.DATE_TIME in semantic_types_dict:
-        datetimes = semantic_types_dict[types.DATE_TIME]
+        datetimes = semantic_types_dict['Data']
         resolved['datetimes'] = datetimes
         timestamps = numpy.empty(
             len(datetimes),
@@ -376,6 +376,8 @@ def process_column(
         for j, dt in enumerate(datetimes):
             timestamps[j] = dt.timestamp()
         resolved['timestamps'] = timestamps
+        
+        
 
         # Compute histogram from temporal values
         if plots and 'plot' not in column_meta:
@@ -398,6 +400,24 @@ def process_column(
                     ]
                 }
 
+    #For date columns
+    if types.DATE in semantic_types_dict:
+        dates = semantic_types_dict['Data']
+        resolved['datetimes'] = dates
+        resolved['timestamps'] = []
+        
+    if types.TIME in semantic_types_dict:
+        times = semantic_types_dict['Data']
+        timestamps = numpy.empty(
+            len(datetimes),
+            dtype='float32',
+        )
+        for j, dt in enumerate(times):
+            timestamps[j] = dt.timestamp()
+        
+        resolved['datetimes'] = []
+        resolved['timestamps'] = timestamps
+    
     # Compute histogram from categorical values
     if plots and types.CATEGORICAL in semantic_types_dict:
         with tracer.start_as_current_span('profile/categorical_plot'):
@@ -581,10 +601,10 @@ def process_dataset(data, dataset_id=None, metadata=None,
         )
     except EmptyDataError:
         logger.warning("Dataframe is empty!")
-        metadata['nb_rows'] = 0
-        metadata['nb_profiled_rows'] = 0
-        metadata['columns'] = []
-        metadata['types'] = []
+        metadata['nb_rows'] = 0 #number of rows
+        metadata['nb_profiled_rows'] = 0 #number of rows profiled
+        metadata['columns'] = [] #names of columns
+        metadata['types'] = [] #types of columns
         return metadata
     metadata.update(file_metadata)
     metadata['nb_profiled_rows'] = data.shape[0]
@@ -941,23 +961,56 @@ def process_dataset(data, dataset_id=None, metadata=None,
                 )
 
                 # Get temporal ranges
-                ranges = get_numerical_ranges(timestamps)
-                if not ranges:
-                    continue
+                ranges_date = get_numerical_ranges_new(datetimes)
+                ranges_time = get_numerical_ranges_new(timestamps)
 
                 # Get temporal resolution
                 resolution = get_temporal_resolution(datetimes)
 
-                temporal_coverage.append({
-                    'type': 'datetime',
-                    'column_names': [col['name']],
-                    'column_indexes': [idx],
-                    'column_types': [types.DATE_TIME],
-                    'ranges': ranges,
-                    'temporal_resolution': resolution,
-                })
+                # get hourly, weekly and quarterly data
+                if resolution in ['hour','minute','second']:
+                    weekPercentageData = getWeekData(datetimes)
+                    quarterPercentageData = getQuarterData(datetimes)
+                    timeOfDayPercentageData = getTimeOfDayData(datetimes)
+                    temporal_coverage.append({
+                        'type': 'datetime',
+                        'column_names': [col['name']],
+                        'column_indexes': [idx],
+                        'column_types': [types.DATE if types.DATE in col['semantic_types'] else types.TIME if types.TIME in col['semantic_types'] else types.DATE_TIME],
+                        'ranges_date': ranges_date,
+                        'ranges_time': ranges_time,
+                        'temporal_resolution': resolution,
+                        'week_percentage_data':weekPercentageData,
+                        'quarter_percentage_data': quarterPercentageData,
+                        'time_of_day_percentage_data':timeOfDayPercentageData
+                    })
+                elif resolution in ['month','day']:
+                    weekPercentageData = getWeekData(datetimes)
+                    quarterPercentageData = getQuarterData(datetimes)
+                    temporal_coverage.append({
+                        'type': 'datetime',
+                        'column_names': [col['name']],
+                        'column_indexes': [idx],
+                        'column_types': [types.DATE if types.DATE in col['semantic_types'] else types.TIME if types.TIME in col['semantic_types'] else types.DATE_TIME],
+                        'ranges_date': ranges_date,
+                        'ranges_time': ranges_time,
+                        'temporal_resolution': resolution,
+                        'week_percentage_data':weekPercentageData,
+                        'quarter_percentage_data': quarterPercentageData,
+                    })
+                else:
+                    temporal_coverage.append({
+                        'type': 'datetime',
+                        'column_names': [col['name']],
+                        'column_indexes': [idx],
+                        'column_types': [types.DATE if types.DATE in col['semantic_types'] else types.TIME if types.TIME in col['semantic_types'] else types.DATE_TIME],
+                        'ranges_date': ranges_date,
+                        'ranges_time': ranges_time,
+                        'temporal_resolution': resolution,
+                    })
 
             # TODO: Times split over multiple columns
+            data,metadata = checkAndCombineTemporalColumns(data,metadata)
 
         if temporal_coverage:
             metadata['temporal_coverage'] = temporal_coverage
