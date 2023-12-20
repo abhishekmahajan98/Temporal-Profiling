@@ -34,6 +34,18 @@ def mean_stddev(array):
 
     return mean, stddev
 
+def get_numerical_ranges_new(values):
+    """
+    Retrieve the numeral ranges given the input (timestamp, integer, or float).
+    """
+    if not len(values):
+        return []
+    values_array = numpy.array(values).reshape(-1, 1)
+
+    # Convert to Elasticsearch syntax
+    ranges = [{'range': {'gte': numpy.max(values_array), 'lte': numpy.min(values_array)}}]
+
+    return ranges
 
 def get_numerical_ranges(values):
     """

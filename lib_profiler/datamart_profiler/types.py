@@ -24,6 +24,14 @@ LONGITUDE = 'http://schema.org/longitude'
 DATE_TIME = 'http://schema.org/DateTime'
 """A specific instant in time (not partial ones such as "July 4" or "12am")"""
 
+#Added new Datatype as Date ONLY
+DATE = 'http://schema.org/Date'
+"""A date value in ISO 8601"""
+
+#Added new Datatyoe as Time ONLY
+TIME = 'http://schema.org/Time'
+"""A point in time recurring on multiple days in the form hh:mm:ss[Z|(+|-)hh:mm]"""
+
 ADDRESS = 'http://schema.org/address'
 """The street address of a location"""
 
